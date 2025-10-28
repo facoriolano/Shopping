@@ -98,81 +98,111 @@ const App = () => {
       return url;
     }
   };
-
-  /**
-   * Fetches product data from a given URL using the Gemini API.
-   * @param url The product URL to search for.
-   * @returns A promise that resolves to the product data.
-   */
-  const fetchProductData = async (url: string): Promise<Omit<Product, 'affiliateIds'>> => {
-    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-
-    const prompt = `Você é um especialista em análise de e-commerce. Sua missão é extrair dados PRECISOS de um produto, usando a busca para encontrar o mesmo item na Amazon Brasil e no Mercado Livre Brasil.
-
-URL de Referência: ${url}
-
-**REGRAS CRÍTICAS (Siga com precisão máxima):**
-
-1.  **Análise Visual Simulada**: Visualize a página do produto como um usuário faria. Concentre-se nos elementos visuais principais: o título grande, a imagem principal de alta qualidade e o preço em destaque.
-2.  **Nome do Produto**: Extraia o nome completo e exato do produto, como exibido no topo da página.
-3.  **Imagem Principal**: Encontre a URL da imagem de **ALTA RESOLUÇÃO** na galeria principal. A URL DEVE ser pública e funcional. **NÃO** use miniaturas (thumbnails). Se a imagem não for clara ou não carregar, retorne 'N/A'.
-4.  **Preço à Vista**: Sua prioridade é o preço **À VISTA**. IGNORE preços parcelados, preços com juros, ou preços exclusivos para assinantes (como Amazon Prime). Busque o preço principal, mais proeminente, exibido para um comprador comum. Formate como 'R$ 1.234,56'. Se o produto estiver indisponível ou sem preço claro, retorne 'N/A'.
-5.  **URL da Loja**: Forneça o link direto para a página exata do produto encontrado. Se não encontrar uma correspondência exata, retorne 'N/A'.
-
-Sua resposta DEVE ser APENAS o texto abaixo, preenchendo os campos. NÃO inclua explicações, comentários ou qualquer outro caractere.
-
-productName: [O nome completo do produto]
-imageUrl: [URL da imagem de alta resolução]
-amazonPrice: [Preço à vista na Amazon ou 'N/A']
-amazonUrl: [URL da Amazon ou 'N/A']
-mercadoLivrePrice: [Preço à vista no Mercado Livre ou 'N/A']
-mercadoLivreUrl: [URL do Mercado Livre ou 'N/A']`;
-
-
-    const response = await ai.models.generateContent({
-      model: "gemini-2.5-pro",
-      contents: prompt,
-      config: {
-        tools: [{googleSearch: {}}],
-      },
-    });
-
-    const textResponse = response.text;
+  
+  const parseGeminiResponse = (textResponse: string): { [key: string]: string } => {
     const lines = textResponse.split('\n').filter(line => line.includes(':'));
-    
     const parsedData: { [key: string]: string } = {};
     lines.forEach(line => {
       const firstColonIndex = line.indexOf(':');
       if (firstColonIndex > -1) {
         const key = line.substring(0, firstColonIndex).trim();
-        // Remove brackets that the model might add, e.g., [Some value] -> Some value
         const value = line.substring(firstColonIndex + 1).trim().replace(/^\[|\]$/g, '');
         parsedData[key] = value;
       }
     });
+    return parsedData;
+  }
 
-    if (!parsedData.productName || parsedData.productName.toLowerCase() === 'n/a' ) {
-        throw new Error("Não foi possível analisar os dados do produto. O modelo não conseguiu identificar o nome.");
+  /**
+   * Fetches product data from a given URL using the Gemini API.
+   * This now follows a robust two-step process:
+   * 1. "Find": Find the equivalent product URLs on Amazon and Mercado Livre.
+   * 2. "Verify": Analyze each of those URLs individually for precise data.
+   * @param url The product URL to search for.
+   * @returns A promise that resolves to the product data.
+   */
+  const fetchProductData = async (url: string): Promise<Omit<Product, 'affiliateIds'>> => {
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    
+    // --- STEP 1: Find URLs ---
+    const findPrompt = `Sua tarefa é ser um assistente de busca. Dada a URL de referência: ${url}, encontre o mesmo produto exato na Amazon Brasil e no Mercado Livre Brasil.
+Sua única saída deve ser o nome do produto e as URLs.
+Responda APENAS no formato:
+productName: [Nome do produto com base na URL original]
+amazonUrl: [URL da Amazon ou 'N/A']
+mercadoLivreUrl: [URL do Mercado Livre ou 'N/A']`;
+
+    const findResponse = await ai.models.generateContent({
+      model: "gemini-2.5-pro",
+      contents: findPrompt,
+      config: { tools: [{googleSearch: {}}] },
+    });
+    
+    const initialData = parseGeminiResponse(findResponse.text);
+    const { productName: initialName, amazonUrl, mercadoLivreUrl } = initialData;
+
+    if (!initialName || initialName === 'N/A') {
+      throw new Error("Não foi possível identificar o produto inicial na URL fornecida.");
     }
+    
+    // --- STEP 2: Verify data on each found URL ---
+    const analyzeStoreUrl = async (storeUrl: string, storeName: string): Promise<{name: string, price: string, imageUrl: string}> => {
+        if (!storeUrl || storeUrl === 'N/A') {
+            return { name: 'N/A', price: 'N/A', imageUrl: 'N/A' };
+        }
+        try {
+            const analyzePrompt = `Você é um extrator de dados robótico. Analise o conteúdo da página na URL a seguir: ${storeUrl}.
+Extraia SOMENTE os seguintes dados com precisão absoluta:
+1. **Nome do Produto**: O título principal e completo do produto.
+2. **Preço à Vista**: O preço principal, para pagamento único. IGNORE parcelas e descontos. Formate como 'R$ 1.234,56'. Se indisponível, retorne 'N/A'.
+3. **URL da Imagem Principal**: A URL da imagem de maior resolução na galeria. Se não carregar, retorne 'N/A'.
+Responda APENAS no formato:
+name: [Nome]
+price: [Preço]
+imageUrl: [URL da Imagem]`;
+            
+            const response = await ai.models.generateContent({
+                model: "gemini-2.5-pro",
+                contents: analyzePrompt,
+                config: { tools: [{googleSearch: {}}] },
+            });
+            const parsed = parseGeminiResponse(response.text);
+            return {
+                name: parsed.name || 'N/A',
+                price: parsed.price || 'N/A',
+                imageUrl: parsed.imageUrl || 'N/A',
+            };
+        } catch (e) {
+            console.error(`Falha ao analisar a URL da ${storeName}:`, e);
+            return { name: 'N/A', price: 'N/A', imageUrl: 'N/A' };
+        }
+    };
 
-    const productData = {
-      productName: parsedData.productName || 'Nome não encontrado',
-      imageUrl: parsedData.imageUrl || 'N/A',
+    const amazonData = await analyzeStoreUrl(amazonUrl, "Amazon");
+    const mercadoLivreData = await analyzeStoreUrl(mercadoLivreUrl, "Mercado Livre");
+
+    // --- AGGREGATE RESULTS ---
+    // Prioritize data from the specific analysis. Use initial name as a fallback.
+    const finalProductName = [amazonData.name, mercadoLivreData.name, initialName].find(n => n && n !== 'N/A') || 'Nome não encontrado';
+    const finalImageUrl = [amazonData.imageUrl, mercadoLivreData.imageUrl].find(i => i && i !== 'N/A') || 'N/A';
+
+    return {
+      productName: finalProductName,
+      imageUrl: finalImageUrl,
       stores: [
         {
           name: "Amazon" as const,
-          price: parsedData.amazonPrice || 'N/A',
-          url: parsedData.amazonUrl || 'N/A',
+          price: amazonData.price,
+          url: amazonUrl || 'N/A',
         },
         {
           name: "Mercado Livre" as const,
-          price: parsedData.mercadoLivrePrice || 'N/A',
-          url: parsedData.mercadoLivreUrl || 'N/A',
+          price: mercadoLivreData.price,
+          url: mercadoLivreUrl || 'N/A',
         },
       ],
+      originalUrl: url
     };
-    
-    return { ...productData, originalUrl: url };
   };
 
   /**
@@ -267,6 +297,8 @@ mercadoLivreUrl: [URL do Mercado Livre ou 'N/A']`;
     } catch (err) {
       console.error("Failed to save edit:", err);
       setError("Não foi possível salvar as alterações. Verifique a URL e tente novamente.");
+      // If closing the modal on failure is not desired, remove the next line
+      setEditingState(null); 
     } finally {
       setIsSavingEdit(false);
       setUpdatingProductIndex(null); // Clear the specific card's loading state
@@ -281,7 +313,6 @@ mercadoLivreUrl: [URL do Mercado Livre ou 'N/A']`;
       setProducts(prevProducts => prevProducts.filter((_, i) => i !== index));
   };
 
-  // FIX: Explicitly type ProductCard as a React.FC to allow the 'key' prop, which is a standard React attribute for list items.
   const ProductCard: React.FC<{ product: Product, index: number }> = ({ product, index }) => {
     const bestOffer = useMemo(() => {
         const parsePrice = (price: string | null): number => {
