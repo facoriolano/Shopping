@@ -1,5 +1,4 @@
-
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import ReactDOM from 'react-dom/client';
 import { GoogleGenAI, Type } from "@google/genai";
 
@@ -45,6 +44,9 @@ const App = () => {
     };
   } | null>(null);
   const [isSavingEdit, setIsSavingEdit] = useState(false);
+
+  // State for Admin Mode
+  const [isAdminMode, setIsAdminMode] = useState(true);
 
 
   /**
@@ -226,151 +228,222 @@ const App = () => {
       setUpdatingProductIndex(null); // Clear the specific card's loading state
     }
   };
+  
+  /**
+   * Deletes a product from the list.
+   * @param index The index of the product to delete.
+   */
+  const handleDeleteProduct = (index: number) => {
+      setProducts(prevProducts => prevProducts.filter((_, i) => i !== index));
+  };
 
+  const ProductCard = ({ product, index }: { product: Product, index: number }) => {
+    const bestOffer = useMemo(() => {
+        const parsePrice = (price: string | null): number => {
+            if (!price || price === 'N/A') return Infinity;
+            return parseFloat(price.replace('R$', '').replace(/\./g, '').replace(',', '.').trim());
+        };
+
+        const validStores = product.stores.filter(store => store.price && store.url && store.price !== 'N/A' && store.url !== 'N/A');
+
+        if (validStores.length === 0) return null;
+
+        return validStores.reduce((best, current) => {
+            const bestPrice = parsePrice(best.price);
+            const currentPrice = parsePrice(current.price);
+            return currentPrice < bestPrice ? current : best;
+        });
+    }, [product.stores]);
+
+    return (
+        <div className="bg-gray-800 rounded-lg shadow-lg overflow-hidden transition-transform transform hover:scale-105 duration-300 flex flex-col group relative">
+          {updatingProductIndex === index && (
+            <div className="absolute inset-0 bg-gray-800 bg-opacity-80 flex flex-col justify-center items-center z-20 rounded-lg">
+                <svg className="animate-spin h-8 w-8 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                <p className="mt-2 text-white font-semibold">Atualizando...</p>
+            </div>
+          )}
+          {isAdminMode && (
+              <div className="absolute top-2 right-2 flex flex-col gap-2 opacity-0 group-hover:opacity-100 transition-opacity z-10">
+                <button
+                  onClick={() => setEditingState({
+                    product,
+                    index,
+                    newUrl: product.originalUrl,
+                    newAffiliateIds: {
+                      amazon: product.affiliateIds?.amazon || '',
+                      mercadoLivre: product.affiliateIds?.mercadoLivre || ''
+                    },
+                  })}
+                  className="bg-gray-700/60 hover:bg-cyan-600/90 text-white p-2 rounded-full"
+                  aria-label="Editar produto"
+                  disabled={isLoading || isUpdatingAll || isSavingEdit || updatingProductIndex !== null}
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                    <path d="M17.414 2.586a2 2 0 00-2.828 0L7 10.172V13h2.828l7.586-7.586a2 2 0 000-2.828z" />
+                    <path fillRule="evenodd" d="M2 6a2 2 0 012-2h4a1 1 0 010 2H4v10h10v-4a1 1 0 112 0v4a2 2 0 01-2 2H4a2 2 0 01-2-2V6z" clipRule="evenodd" />
+                  </svg>
+                </button>
+                <button
+                    onClick={() => handleDeleteProduct(index)}
+                    className="bg-gray-700/60 hover:bg-red-600/90 text-white p-2 rounded-full"
+                    aria-label="Excluir produto"
+                    disabled={isLoading || isUpdatingAll || isSavingEdit || updatingProductIndex !== null}
+                >
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                        <path fillRule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm4 0a1 1 0 012 0v6a1 1 0 11-2 0V8z" clipRule="evenodd" />
+                    </svg>
+                </button>
+              </div>
+          )}
+          <div className="bg-white p-2 flex-shrink-0">
+              <img src={product.imageUrl} alt={product.productName} className="w-full h-48 object-contain" />
+          </div>
+          <div className="p-4 flex flex-col flex-grow">
+            <h3 className="font-bold text-lg h-14 overflow-hidden text-gray-200 flex-grow">{product.productName}</h3>
+            {bestOffer ? (
+                <div className="mt-4 space-y-3">
+                    <div className="text-center">
+                        <p className="text-sm text-gray-400">Melhor preço em:</p>
+                        <img 
+                          src={bestOffer.name === 'Amazon' ? 'https://upload.wikimedia.org/wikipedia/commons/a/a9/Amazon_logo.svg' : 'https://upload.wikimedia.org/wikipedia/commons/thumb/3/3b/Mercado_Livre_logo.svg/2560px-Mercado_Livre_logo.svg.png'} 
+                          alt={bestOffer.name} 
+                          className="h-6 mx-auto mt-1 mb-2"
+                        />
+                        <p className="font-bold text-cyan-400 text-3xl">{bestOffer.price}</p>
+                    </div>
+                    <a
+                        href={constructAffiliateUrl(bestOffer.url!, bestOffer.name, product.affiliateIds)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="block w-full text-center bg-cyan-600 hover:bg-cyan-700 text-white font-bold py-3 px-4 rounded-md transition-colors mt-4"
+                      >
+                        Ver a Melhor Oferta
+                    </a>
+                </div>
+            ) : (
+                <div className="mt-auto pt-4 text-center">
+                    <p className="text-gray-400">Oferta indisponível</p>
+                    <div className="block w-full text-center bg-gray-600 text-white font-bold py-3 px-4 rounded-md mt-4 cursor-not-allowed">
+                        Indisponível
+                    </div>
+                </div>
+            )}
+          </div>
+        </div>
+    );
+  };
 
   return (
     <>
       <div className="min-h-screen bg-gray-900 text-white font-sans p-4 sm:p-8">
-        <div className="max-w-5xl mx-auto">
-          <header className="text-center mb-8">
+        <div className="max-w-6xl mx-auto">
+          <header className="text-center mb-8 relative">
             <h1 className="text-4xl sm:text-5xl font-bold text-cyan-400">Price Tracker Pro</h1>
-            <p className="text-gray-400 mt-2">Monitore os preços de seus produtos favoritos com links de afiliado.</p>
+            <p className="text-gray-400 mt-2">Sua vitrine de produtos selecionados com os melhores preços.</p>
+            <div className="absolute top-0 right-0">
+                <label htmlFor="admin-toggle" className="flex items-center cursor-pointer">
+                    <span className="mr-3 text-sm font-medium text-gray-300">Modo Loja</span>
+                    <div className="relative">
+                        <input type="checkbox" id="admin-toggle" className="sr-only" checked={isAdminMode} onChange={() => setIsAdminMode(!isAdminMode)} />
+                        <div className="block bg-gray-600 w-14 h-8 rounded-full"></div>
+                        <div className="dot absolute left-1 top-1 bg-white w-6 h-6 rounded-full transition-transform"></div>
+                    </div>
+                    <span className="ml-3 text-sm font-medium text-cyan-400">Modo Admin</span>
+                </label>
+            </div>
+            <style>{`
+                input:checked ~ .dot {
+                    transform: translateX(100%);
+                    background-color: #0891b2; /* cyan-600 */
+                }
+            `}</style>
           </header>
 
           <main>
-            <div className="bg-gray-800 p-6 rounded-lg shadow-lg mb-8 sticky top-4 z-10">
-              <h2 className="text-2xl font-semibold mb-4 text-white">Adicionar Novo Produto</h2>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
-                 <input
-                  type="text"
-                  value={globalAffiliateIds.amazon}
-                  onChange={(e) => setGlobalAffiliateIds(prev => ({...prev, amazon: e.target.value}))}
-                  placeholder="Seu ID de Afiliado Amazon (tag)"
-                  className="bg-gray-700 text-white placeholder-gray-400 border border-gray-600 rounded-md py-3 px-4 focus:outline-none focus:ring-2 focus:ring-cyan-500"
-                  aria-label="Seu ID de Afiliado Amazon (Global)"
-                />
-                 <input
-                  type="text"
-                  value={globalAffiliateIds.mercadoLivre}
-                  onChange={(e) => setGlobalAffiliateIds(prev => ({...prev, mercadoLivre: e.target.value}))}
-                  placeholder="Seu ID de Afiliado Mercado Livre (afid)"
-                  className="bg-gray-700 text-white placeholder-gray-400 border border-gray-600 rounded-md py-3 px-4 focus:outline-none focus:ring-2 focus:ring-cyan-500"
-                  aria-label="Seu ID de Afiliado Mercado Livre (Global)"
-                />
-              </div>
-              <div className="flex flex-col sm:flex-row gap-4">
-                <input
-                  type="url"
-                  value={productUrl}
-                  onChange={(e) => setProductUrl(e.target.value)}
-                  placeholder="Cole o link do produto aqui (Ex: Amazon)"
-                  className="flex-grow bg-gray-700 text-white placeholder-gray-400 border border-gray-600 rounded-md py-3 px-4 focus:outline-none focus:ring-2 focus:ring-cyan-500"
-                  disabled={isLoading || isUpdatingAll || updatingProductIndex !== null}
-                  aria-label="URL do Produto"
-                />
-                <button
-                  onClick={handleAddProduct}
-                  disabled={isLoading || isUpdatingAll || updatingProductIndex !== null || !productUrl}
-                  className="bg-cyan-600 hover:bg-cyan-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold py-3 px-6 rounded-md transition-colors duration-300 flex items-center justify-center"
-                >
-                  {isLoading ? (
-                    <svg className="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                    </svg>
-                  ) : 'Adicionar'}
-                </button>
-              </div>
-              {error && !editingState && <p className="text-red-400 mt-4 text-center">{error}</p>}
-            </div>
+            {isAdminMode && (
+                <div className="bg-gray-800 p-6 rounded-lg shadow-lg mb-8 sticky top-4 z-10">
+                <h2 className="text-2xl font-semibold mb-4 text-white">Adicionar Novo Produto</h2>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                    <input
+                    type="text"
+                    value={globalAffiliateIds.amazon}
+                    onChange={(e) => setGlobalAffiliateIds(prev => ({...prev, amazon: e.target.value}))}
+                    placeholder="Seu ID de Afiliado Amazon (tag)"
+                    className="bg-gray-700 text-white placeholder-gray-400 border border-gray-600 rounded-md py-3 px-4 focus:outline-none focus:ring-2 focus:ring-cyan-500"
+                    aria-label="Seu ID de Afiliado Amazon (Global)"
+                    />
+                    <input
+                    type="text"
+                    value={globalAffiliateIds.mercadoLivre}
+                    onChange={(e) => setGlobalAffiliateIds(prev => ({...prev, mercadoLivre: e.target.value}))}
+                    placeholder="Seu ID de Afiliado Mercado Livre (afid)"
+                    className="bg-gray-700 text-white placeholder-gray-400 border border-gray-600 rounded-md py-3 px-4 focus:outline-none focus:ring-2 focus:ring-cyan-500"
+                    aria-label="Seu ID de Afiliado Mercado Livre (Global)"
+                    />
+                </div>
+                <div className="flex flex-col sm:flex-row gap-4">
+                    <input
+                    type="url"
+                    value={productUrl}
+                    onChange={(e) => setProductUrl(e.target.value)}
+                    placeholder="Cole o link do produto aqui (Ex: Amazon)"
+                    className="flex-grow bg-gray-700 text-white placeholder-gray-400 border border-gray-600 rounded-md py-3 px-4 focus:outline-none focus:ring-2 focus:ring-cyan-500"
+                    disabled={isLoading || isUpdatingAll || updatingProductIndex !== null}
+                    aria-label="URL do Produto"
+                    />
+                    <button
+                    onClick={handleAddProduct}
+                    disabled={isLoading || isUpdatingAll || updatingProductIndex !== null || !productUrl}
+                    className="bg-cyan-600 hover:bg-cyan-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold py-3 px-6 rounded-md transition-colors duration-300 flex items-center justify-center"
+                    >
+                    {isLoading ? (
+                        <svg className="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                    ) : 'Adicionar'}
+                    </button>
+                </div>
+                {error && !editingState && <p className="text-red-400 mt-4 text-center">{error}</p>}
+                </div>
+            )}
             
             <div className="flex justify-between items-center mb-6">
               <h2 className="text-3xl font-bold text-gray-300">Meus Produtos</h2>
-              <button
-                onClick={handleUpdateAllProducts}
-                disabled={isLoading || isUpdatingAll || updatingProductIndex !== null || products.length === 0}
-                className="bg-green-600 hover:bg-green-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold py-2 px-4 rounded-md transition-colors duration-300 flex items-center justify-center gap-2"
-                aria-label="Atualizar preços de todos os produtos"
-              >
-                {isUpdatingAll ? (
-                  <>
-                    <svg className="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                    </svg>
-                    <span>Atualizando...</span>
-                  </>
-                ) : (
-                  <>
-                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                      <path fillRule="evenodd" d="M4 2a1 1 0 011 1v2.101a7.002 7.002 0 0111.601 2.566 1 1 0 11-1.885.666A5.002 5.002 0 005.999 7H9a1 1 0 110 2H4a1 1 0 01-1-1V3a1 1 0 011-1zm.008 9.057a1 1 0 011.276.61A5.002 5.002 0 0014.001 13H11a1 1 0 110-2h5a1 1 0 011 1v5a1 1 0 11-2 0v-2.101a7.002 7.002 0 01-11.601-2.566 1 1 0 01.61-1.276z" clipRule="evenodd" />
-                    </svg>
-                    <span>Atualizar Todos</span>
-                  </>
-                )}
-              </button>
-            </div>
-
-
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {products.map((product, index) => (
-                <div key={index} className="bg-gray-800 rounded-lg shadow-lg overflow-hidden transition-transform transform hover:scale-105 duration-300 flex flex-col group relative">
-                  {updatingProductIndex === index && (
-                    <div className="absolute inset-0 bg-gray-800 bg-opacity-80 flex flex-col justify-center items-center z-20 rounded-lg">
-                        <svg className="animate-spin h-8 w-8 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+              {isAdminMode && (
+                <button
+                    onClick={handleUpdateAllProducts}
+                    disabled={isLoading || isUpdatingAll || updatingProductIndex !== null || products.length === 0}
+                    className="bg-green-600 hover:bg-green-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold py-2 px-4 rounded-md transition-colors duration-300 flex items-center justify-center gap-2"
+                    aria-label="Atualizar preços de todos os produtos"
+                >
+                    {isUpdatingAll ? (
+                    <>
+                        <svg className="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                             <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                             <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                         </svg>
-                        <p className="mt-2 text-white font-semibold">Atualizando...</p>
-                    </div>
-                  )}
-                  <button
-                    onClick={() => setEditingState({
-                      product,
-                      index,
-                      newUrl: product.originalUrl,
-                      newAffiliateIds: {
-                        amazon: product.affiliateIds?.amazon || '',
-                        mercadoLivre: product.affiliateIds?.mercadoLivre || ''
-                      },
-                    })}
-                    className="absolute top-2 right-2 bg-gray-700/50 hover:bg-cyan-600/80 text-white p-2 rounded-full opacity-0 group-hover:opacity-100 transition-opacity z-10"
-                    aria-label="Editar produto"
-                    disabled={isLoading || isUpdatingAll || isSavingEdit || updatingProductIndex !== null}
-                  >
-                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                      <path d="M17.414 2.586a2 2 0 00-2.828 0L7 10.172V13h2.828l7.586-7.586a2 2 0 000-2.828z" />
-                      <path fillRule="evenodd" d="M2 6a2 2 0 012-2h4a1 1 0 010 2H4v10h10v-4a1 1 0 112 0v4a2 2 0 01-2 2H4a2 2 0 01-2-2V6z" clipRule="evenodd" />
-                    </svg>
-                  </button>
-                  <div className="bg-white p-2 flex-shrink-0">
-                      <img src={product.imageUrl} alt={product.productName} className="w-full h-48 object-contain" />
-                  </div>
-                  <div className="p-4 flex flex-col flex-grow">
-                    <h3 className="font-bold text-lg h-14 overflow-hidden text-gray-200">{product.productName}</h3>
-                    <div className="mt-4 space-y-3 flex-grow">
-                      {product.stores.map((store, storeIndex) => (
-                        store.url && store.price && store.url !== 'N/A' && store.price !== 'N/A' ? (
-                          <a
-                            key={storeIndex}
-                            href={constructAffiliateUrl(store.url, store.name, product.affiliateIds)}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="flex justify-between items-center bg-gray-700 p-3 rounded-md hover:bg-gray-600 transition-colors"
-                          >
-                            <span className="font-semibold text-gray-300">{store.name}</span>
-                            <span className="font-bold text-cyan-400 text-lg">{store.price}</span>
-                          </a>
-                        ) : (
-                          <div key={storeIndex} className="flex justify-between items-center bg-gray-700 p-3 rounded-md opacity-60 cursor-default">
-                              <span className="font-semibold text-gray-400">{store.name}</span>
-                              <span className="text-sm text-gray-400">Não encontrado</span>
-                          </div>
-                        )
-                      ))}
-                    </div>
-                  </div>
-                </div>
+                        <span>Atualizando...</span>
+                    </>
+                    ) : (
+                    <>
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                        <path fillRule="evenodd" d="M4 2a1 1 0 011 1v2.101a7.002 7.002 0 0111.601 2.566 1 1 0 11-1.885.666A5.002 5.002 0 005.999 7H9a1 1 0 110 2H4a1 1 0 01-1-1V3a1 1 0 011-1zm.008 9.057a1 1 0 011.276.61A5.002 5.002 0 0014.001 13H11a1 1 0 110-2h5a1 1 0 011 1v5a1 1 0 11-2 0v-2.101a7.002 7.002 0 01-11.601-2.566 1 1 0 01.61-1.276z" clipRule="evenodd" />
+                        </svg>
+                        <span>Atualizar Todos</span>
+                    </>
+                    )}
+                </button>
+              )}
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+              {products.map((product, index) => (
+                <ProductCard key={index} product={product} index={index} />
               ))}
             </div>
           </main>
