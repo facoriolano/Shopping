@@ -1,0 +1,5 @@
+{
+  "name": "Price Tracker Pro",
+  "description": "An application to monitor the prices of products you register. Add a product, and the app will track its price on major online retailers like Amazon and Mercado Livre using AI.",
+  "requestFramePermissions": []
+}
