@@ -60,7 +60,8 @@ const App = () => {
   useEffect(() => {
     try {
       localStorage.setItem('priceTrackerProducts', JSON.stringify(products));
-    } catch (error) {
+    } catch (error)
+ {
       console.error("Could not save products to localStorage", error);
     }
   }, [products]);
@@ -106,7 +107,7 @@ const App = () => {
       const firstColonIndex = line.indexOf(':');
       if (firstColonIndex > -1) {
         const key = line.substring(0, firstColonIndex).trim();
-        const value = line.substring(firstColonIndex + 1).trim().replace(/^\[|\]$/g, '');
+        const value = line.substring(firstColonIndex + 1).trim();
         parsedData[key] = value;
       }
     });
@@ -115,90 +116,76 @@ const App = () => {
 
   /**
    * Fetches product data from a given URL using the Gemini API.
-   * This now follows a robust two-step process:
-   * 1. "Find": Find the equivalent product URLs on Amazon and Mercado Livre.
-   * 2. "Verify": Analyze each of those URLs individually for precise data.
+   * This uses the "Unified Analysis" strategy: a single, robust prompt
+   * to analyze the base URL and find/verify data on other stores.
    * @param url The product URL to search for.
    * @returns A promise that resolves to the product data.
    */
   const fetchProductData = async (url: string): Promise<Omit<Product, 'affiliateIds'>> => {
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-    
-    // --- STEP 1: Find URLs ---
-    const findPrompt = `Sua tarefa é ser um assistente de busca. Dada a URL de referência: ${url}, encontre o mesmo produto exato na Amazon Brasil e no Mercado Livre Brasil.
-Sua única saída deve ser o nome do produto e as URLs.
-Responda APENAS no formato:
-productName: [Nome do produto com base na URL original]
-amazonUrl: [URL da Amazon ou 'N/A']
-mercadoLivreUrl: [URL do Mercado Livre ou 'N/A']`;
 
-    const findResponse = await ai.models.generateContent({
-      model: "gemini-2.5-pro",
-      contents: findPrompt,
-      config: { tools: [{googleSearch: {}}] },
+    const prompt = `
+**Tarefa:** Agir como um especialista em e-commerce para extrair e comparar dados de um produto.
+
+**URL de Referência:** ${url}
+
+**Instruções Passo a Passo:**
+
+1.  **Análise da URL de Referência:**
+    *   Vá para a URL de referência.
+    *   Identifique o **nome principal e completo** do produto.
+    *   Identifique a **URL da imagem principal de alta resolução**. Ignore thumbnails.
+
+2.  **Busca e Verificação em Lojas:**
+    *   Use a busca para encontrar a página **exata** do mesmo produto (mesmo modelo, cor, capacidade, etc.) na **Amazon.com.br** e no **MercadoLivre.com.br**.
+    *   Se encontrar uma correspondência exata, extraia a URL da página do produto.
+    *   Visite a URL encontrada para cada loja e extraia o **preço principal (à vista)**. O preço deve ser o mais proeminente na página, o que o cliente pagaria em uma única vez. Ignore preços parcelados, de vendedores secundários ou de assinaturas (como Amazon Prime). Formate o preço como 'R$ 1.234,56'.
+
+3.  **Formato de Saída OBRIGATÓRIO:**
+    *   Responda **APENAS** com os dados no formato chave-valor abaixo. Não inclua nenhuma outra palavra, explicação ou formatação.
+    *   Se qualquer informação não puder ser encontrada com 100% de certeza, use o valor **'N/A'**.
+
+**SAÍDA:**
+productName: [Nome do produto da URL de referência]
+imageUrl: [URL da imagem da URL de referência]
+amazonUrl: [URL encontrada na Amazon ou 'N/A']
+amazonPrice: [Preço encontrado na Amazon ou 'N/A']
+mercadoLivreUrl: [URL encontrada no Mercado Livre ou 'N/A']
+mercadoLivrePrice: [Preço encontrado no Mercado Livre ou 'N/A']
+`;
+
+    const response = await ai.models.generateContent({
+        model: "gemini-2.5-pro",
+        contents: prompt,
+        config: { tools: [{googleSearch: {}}] },
     });
-    
-    const initialData = parseGeminiResponse(findResponse.text);
-    const { productName: initialName, amazonUrl, mercadoLivreUrl } = initialData;
 
-    if (!initialName || initialName === 'N/A') {
-      throw new Error("Não foi possível identificar o produto inicial na URL fornecida.");
+    const data = parseGeminiResponse(response.text);
+
+    const productName = data.productName || 'Nome não encontrado';
+    const imageUrl = data.imageUrl || 'N/A';
+    const amazonUrl = data.amazonUrl || 'N/A';
+    const amazonPrice = data.amazonPrice || 'N/A';
+    const mercadoLivreUrl = data.mercadoLivreUrl || 'N/A';
+    const mercadoLivrePrice = data.mercadoLivrePrice || 'N/A';
+    
+    if (productName === 'Nome não encontrado' && imageUrl === 'N/A') {
+        throw new Error("Não foi possível extrair nenhuma informação da URL fornecida.");
     }
-    
-    // --- STEP 2: Verify data on each found URL ---
-    const analyzeStoreUrl = async (storeUrl: string, storeName: string): Promise<{name: string, price: string, imageUrl: string}> => {
-        if (!storeUrl || storeUrl === 'N/A') {
-            return { name: 'N/A', price: 'N/A', imageUrl: 'N/A' };
-        }
-        try {
-            const analyzePrompt = `Você é um extrator de dados robótico. Analise o conteúdo da página na URL a seguir: ${storeUrl}.
-Extraia SOMENTE os seguintes dados com precisão absoluta:
-1. **Nome do Produto**: O título principal e completo do produto.
-2. **Preço à Vista**: O preço principal, para pagamento único. IGNORE parcelas e descontos. Formate como 'R$ 1.234,56'. Se indisponível, retorne 'N/A'.
-3. **URL da Imagem Principal**: A URL da imagem de maior resolução na galeria. Se não carregar, retorne 'N/A'.
-Responda APENAS no formato:
-name: [Nome]
-price: [Preço]
-imageUrl: [URL da Imagem]`;
-            
-            const response = await ai.models.generateContent({
-                model: "gemini-2.5-pro",
-                contents: analyzePrompt,
-                config: { tools: [{googleSearch: {}}] },
-            });
-            const parsed = parseGeminiResponse(response.text);
-            return {
-                name: parsed.name || 'N/A',
-                price: parsed.price || 'N/A',
-                imageUrl: parsed.imageUrl || 'N/A',
-            };
-        } catch (e) {
-            console.error(`Falha ao analisar a URL da ${storeName}:`, e);
-            return { name: 'N/A', price: 'N/A', imageUrl: 'N/A' };
-        }
-    };
-
-    const amazonData = await analyzeStoreUrl(amazonUrl, "Amazon");
-    const mercadoLivreData = await analyzeStoreUrl(mercadoLivreUrl, "Mercado Livre");
-
-    // --- AGGREGATE RESULTS ---
-    // Prioritize data from the specific analysis. Use initial name as a fallback.
-    const finalProductName = [amazonData.name, mercadoLivreData.name, initialName].find(n => n && n !== 'N/A') || 'Nome não encontrado';
-    const finalImageUrl = [amazonData.imageUrl, mercadoLivreData.imageUrl].find(i => i && i !== 'N/A') || 'N/A';
 
     return {
-      productName: finalProductName,
-      imageUrl: finalImageUrl,
+      productName,
+      imageUrl,
       stores: [
         {
           name: "Amazon" as const,
-          price: amazonData.price,
-          url: amazonUrl || 'N/A',
+          price: amazonPrice,
+          url: amazonUrl,
         },
         {
           name: "Mercado Livre" as const,
-          price: mercadoLivreData.price,
-          url: mercadoLivreUrl || 'N/A',
+          price: mercadoLivrePrice,
+          url: mercadoLivreUrl,
         },
       ],
       originalUrl: url
