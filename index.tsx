@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import ReactDOM from 'react-dom/client';
-import { GoogleGenAI, Type } from "@google/genai";
+import { GoogleGenAI } from "@google/genai";
 
 // Define the structure for product data
 interface ProductStore {
@@ -107,27 +107,7 @@ const App = () => {
   const fetchProductData = async (url: string): Promise<Omit<Product, 'affiliateIds'>> => {
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
-    const responseSchema = {
-      type: Type.OBJECT,
-      properties: {
-        productName: { type: Type.STRING, description: "Nome completo do produto." },
-        imageUrl: { type: Type.STRING, description: "URL de uma imagem de alta qualidade do produto." },
-        stores: {
-          type: Type.ARRAY,
-          items: {
-            type: Type.OBJECT,
-            properties: {
-              name: { type: Type.STRING, description: "O nome da loja, 'Amazon' ou 'Mercado Livre'." },
-              price: { type: Type.STRING, description: "O preço atual formatado (ex: 'R$ 1.234,56') ou 'N/A' se não encontrado." },
-              url: { type: Type.STRING, description: "O link direto para o produto na loja ou 'N/A' se não encontrado." },
-            },
-            required: ["name", "price", "url"],
-          },
-        },
-      },
-      required: ["productName", "imageUrl", "stores"],
-    };
-
+    // Since responseSchema is removed, the prompt must be extremely clear about the output format.
     const prompt = `Use a busca para analisar a URL do produto e encontrar o mesmo item na Amazon Brasil e no Mercado Livre Brasil. Sua prioridade máxima é a precisão do PREÇO e da IMAGEM.
 
     URL Original: ${url}
@@ -139,19 +119,42 @@ const App = () => {
     4.  **Extração de Preço (price)**: Extraia o preço À VISTA principal. Ignore preços parcelados, preços de vendedores secundários ou "a partir de". O preço deve ser o valor final que o cliente pagaria (sem frete). Formate como 'R$ 1.234,56'. Se o produto estiver indisponível ou sem preço, retorne 'N/A'.
     5.  **Extração de URL (url)**: Forneça o link direto para a página do produto encontrada. Se não encontrou, retorne 'N/A'.
 
-    Seu resultado DEVE estar no formato JSON especificado. Verifique novamente todos os campos antes de responder para garantir 100% de precisão.`;
+    Sua resposta DEVE ser um único objeto JSON válido, seguindo ESTRITAMENTE esta estrutura:
+    {
+      "productName": "string",
+      "imageUrl": "string",
+      "stores": [
+        {
+          "name": "Amazon",
+          "price": "string",
+          "url": "string"
+        },
+        {
+          "name": "Mercado Livre",
+          "price": "string",
+          "url": "string"
+        }
+      ]
+    }
+    Responda APENAS com o código JSON. Não inclua a palavra 'json', acentos graves (\`\`\`), ou qualquer outro texto antes ou depois do objeto JSON.`;
 
     const response = await ai.models.generateContent({
       model: "gemini-2.5-pro",
       contents: prompt,
       config: {
-        responseMimeType: "application/json",
-        responseSchema: responseSchema,
+        // REMOVED: responseMimeType and responseSchema to comply with API rules for tools.
         tools: [{googleSearch: {}}],
       },
     });
 
-    const jsonString = response.text.trim();
+    let jsonString = response.text.trim();
+    // Clean potential markdown fences that the model might add despite instructions.
+    if (jsonString.startsWith('```json')) {
+      jsonString = jsonString.slice(7, -3).trim();
+    } else if (jsonString.startsWith('```')) {
+      jsonString = jsonString.slice(3, -3).trim();
+    }
+
     const productData = JSON.parse(jsonString) as Omit<Product, 'originalUrl' | 'affiliateIds'>;
     return { ...productData, originalUrl: url };
   };
