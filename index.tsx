@@ -107,55 +107,69 @@ const App = () => {
   const fetchProductData = async (url: string): Promise<Omit<Product, 'affiliateIds'>> => {
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
-    // Since responseSchema is removed, the prompt must be extremely clear about the output format.
     const prompt = `Use a busca para analisar a URL do produto e encontrar o mesmo item na Amazon Brasil e no Mercado Livre Brasil. Sua prioridade máxima é a precisão do PREÇO e da IMAGEM.
 
     URL Original: ${url}
 
     Siga estas regras RIGOROSAMENTE:
     1.  **Busca e Verificação**: Use a busca para encontrar as páginas de produto mais atuais na Amazon.com.br e no MercadoLivre.com.br. Compare o nome do produto, modelo e especificações para garantir que é EXATAMENTE o mesmo item.
-    2.  **Extração de Nome (productName)**: Obtenha o nome completo e oficial do produto.
-    3.  **Extração de Imagem (imageUrl)**: Encontre a URL da imagem PRINCIPAL e de ALTA RESOLUÇÃO. A URL DEVE ser pública e terminar com uma extensão de imagem (.jpg, .png, .webp). NÃO use imagens de thumbnails, logos, ou URLs que não levam diretamente à imagem. Se for impossível encontrar uma URL válida, retorne 'N/A'.
-    4.  **Extração de Preço (price)**: Extraia o preço À VISTA principal. Ignore preços parcelados, preços de vendedores secundários ou "a partir de". O preço deve ser o valor final que o cliente pagaria (sem frete). Formate como 'R$ 1.234,56'. Se o produto estiver indisponível ou sem preço, retorne 'N/A'.
-    5.  **Extração de URL (url)**: Forneça o link direto para a página do produto encontrada. Se não encontrou, retorne 'N/A'.
+    2.  **Extração de Nome**: Obtenha o nome completo e oficial do produto.
+    3.  **Extração de Imagem**: Encontre a URL da imagem PRINCIPAL e de ALTA RESOLUÇÃO. A URL DEVE ser pública e terminar com uma extensão de imagem (.jpg, .png, .webp). Se for impossível encontrar uma URL válida, retorne 'N/A'.
+    4.  **Extração de Preço**: Extraia o preço À VISTA principal. Ignore preços parcelados. Formate como 'R$ 1.234,56'. Se o produto estiver indisponível ou sem preço, retorne 'N/A'.
+    5.  **Extração de URL**: Forneça o link direto para a página do produto encontrada. Se não encontrou, retorne 'N/A'.
 
-    Sua resposta DEVE ser um único objeto JSON válido, seguindo ESTRITAMENTE esta estrutura:
-    {
-      "productName": "string",
-      "imageUrl": "string",
-      "stores": [
-        {
-          "name": "Amazon",
-          "price": "string",
-          "url": "string"
-        },
-        {
-          "name": "Mercado Livre",
-          "price": "string",
-          "url": "string"
-        }
-      ]
-    }
-    Responda APENAS com o código JSON. Não inclua a palavra 'json', acentos graves (\`\`\`), ou qualquer outro texto antes ou depois do objeto JSON.`;
+    Sua resposta DEVE seguir ESTRITAMENTE o seguinte formato de texto, com cada campo em uma nova linha. NÃO adicione nenhum outro texto, explicação ou formatação.
+
+productName: [O nome completo do produto]
+imageUrl: [URL da imagem principal]
+amazonPrice: [Preço na Amazon ou 'N/A']
+amazonUrl: [URL da Amazon ou 'N/A']
+mercadoLivrePrice: [Preço no Mercado Livre ou 'N/A']
+mercadoLivreUrl: [URL do Mercado Livre ou 'N/A']`;
 
     const response = await ai.models.generateContent({
       model: "gemini-2.5-pro",
       contents: prompt,
       config: {
-        // REMOVED: responseMimeType and responseSchema to comply with API rules for tools.
         tools: [{googleSearch: {}}],
       },
     });
 
-    let jsonString = response.text.trim();
-    // Clean potential markdown fences that the model might add despite instructions.
-    if (jsonString.startsWith('```json')) {
-      jsonString = jsonString.slice(7, -3).trim();
-    } else if (jsonString.startsWith('```')) {
-      jsonString = jsonString.slice(3, -3).trim();
+    const textResponse = response.text;
+    const lines = textResponse.split('\n').filter(line => line.includes(':'));
+    
+    const parsedData: { [key: string]: string } = {};
+    lines.forEach(line => {
+      const firstColonIndex = line.indexOf(':');
+      if (firstColonIndex > -1) {
+        const key = line.substring(0, firstColonIndex).trim();
+        // Remove brackets that the model might add, e.g., [Some value] -> Some value
+        const value = line.substring(firstColonIndex + 1).trim().replace(/^\[|\]$/g, '');
+        parsedData[key] = value;
+      }
+    });
+
+    if (!parsedData.productName) {
+        throw new Error("Não foi possível analisar os dados do produto a partir da resposta da IA.");
     }
 
-    const productData = JSON.parse(jsonString) as Omit<Product, 'originalUrl' | 'affiliateIds'>;
+    const productData = {
+      productName: parsedData.productName || 'Nome não encontrado',
+      imageUrl: parsedData.imageUrl || 'N/A',
+      stores: [
+        {
+          name: "Amazon" as const,
+          price: parsedData.amazonPrice || 'N/A',
+          url: parsedData.amazonUrl || 'N/A',
+        },
+        {
+          name: "Mercado Livre" as const,
+          price: parsedData.mercadoLivrePrice || 'N/A',
+          url: parsedData.mercadoLivreUrl || 'N/A',
+        },
+      ],
+    };
+    
     return { ...productData, originalUrl: url };
   };
 
