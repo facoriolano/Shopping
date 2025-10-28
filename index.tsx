@@ -107,25 +107,27 @@ const App = () => {
   const fetchProductData = async (url: string): Promise<Omit<Product, 'affiliateIds'>> => {
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
-    const prompt = `Use a busca para analisar a URL do produto e encontrar o mesmo item na Amazon Brasil e no Mercado Livre Brasil. Sua prioridade máxima é a precisão do PREÇO e da IMAGEM.
+    const prompt = `Você é um especialista em análise de e-commerce. Sua missão é extrair dados PRECISOS de um produto, usando a busca para encontrar o mesmo item na Amazon Brasil e no Mercado Livre Brasil.
 
-    URL Original: ${url}
+URL de Referência: ${url}
 
-    Siga estas regras RIGOROSAMENTE:
-    1.  **Busca e Verificação**: Use a busca para encontrar as páginas de produto mais atuais na Amazon.com.br e no MercadoLivre.com.br. Compare o nome do produto, modelo e especificações para garantir que é EXATAMENTE o mesmo item.
-    2.  **Extração de Nome**: Obtenha o nome completo e oficial do produto.
-    3.  **Extração de Imagem**: Encontre a URL da imagem PRINCIPAL e de ALTA RESOLUÇÃO. A URL DEVE ser pública e terminar com uma extensão de imagem (.jpg, .png, .webp). Se for impossível encontrar uma URL válida, retorne 'N/A'.
-    4.  **Extração de Preço**: Extraia o preço À VISTA principal. Ignore preços parcelados. Formate como 'R$ 1.234,56'. Se o produto estiver indisponível ou sem preço, retorne 'N/A'.
-    5.  **Extração de URL**: Forneça o link direto para a página do produto encontrada. Se não encontrou, retorne 'N/A'.
+**REGRAS CRÍTICAS (Siga com precisão máxima):**
 
-    Sua resposta DEVE seguir ESTRITAMENTE o seguinte formato de texto, com cada campo em uma nova linha. NÃO adicione nenhum outro texto, explicação ou formatação.
+1.  **Análise Visual Simulada**: Visualize a página do produto como um usuário faria. Concentre-se nos elementos visuais principais: o título grande, a imagem principal de alta qualidade e o preço em destaque.
+2.  **Nome do Produto**: Extraia o nome completo e exato do produto, como exibido no topo da página.
+3.  **Imagem Principal**: Encontre a URL da imagem de **ALTA RESOLUÇÃO** na galeria principal. A URL DEVE ser pública e funcional. **NÃO** use miniaturas (thumbnails). Se a imagem não for clara ou não carregar, retorne 'N/A'.
+4.  **Preço à Vista**: Sua prioridade é o preço **À VISTA**. IGNORE preços parcelados, preços com juros, ou preços exclusivos para assinantes (como Amazon Prime). Busque o preço principal, mais proeminente, exibido para um comprador comum. Formate como 'R$ 1.234,56'. Se o produto estiver indisponível ou sem preço claro, retorne 'N/A'.
+5.  **URL da Loja**: Forneça o link direto para a página exata do produto encontrado. Se não encontrar uma correspondência exata, retorne 'N/A'.
+
+Sua resposta DEVE ser APENAS o texto abaixo, preenchendo os campos. NÃO inclua explicações, comentários ou qualquer outro caractere.
 
 productName: [O nome completo do produto]
-imageUrl: [URL da imagem principal]
-amazonPrice: [Preço na Amazon ou 'N/A']
+imageUrl: [URL da imagem de alta resolução]
+amazonPrice: [Preço à vista na Amazon ou 'N/A']
 amazonUrl: [URL da Amazon ou 'N/A']
-mercadoLivrePrice: [Preço no Mercado Livre ou 'N/A']
+mercadoLivrePrice: [Preço à vista no Mercado Livre ou 'N/A']
 mercadoLivreUrl: [URL do Mercado Livre ou 'N/A']`;
+
 
     const response = await ai.models.generateContent({
       model: "gemini-2.5-pro",
@@ -149,8 +151,8 @@ mercadoLivreUrl: [URL do Mercado Livre ou 'N/A']`;
       }
     });
 
-    if (!parsedData.productName) {
-        throw new Error("Não foi possível analisar os dados do produto a partir da resposta da IA.");
+    if (!parsedData.productName || parsedData.productName.toLowerCase() === 'n/a' ) {
+        throw new Error("Não foi possível analisar os dados do produto. O modelo não conseguiu identificar o nome.");
     }
 
     const productData = {
