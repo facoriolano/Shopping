@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import ReactDOM from 'react-dom/client';
 import { GoogleGenAI, Type } from "@google/genai";
 
@@ -21,7 +21,15 @@ interface Product {
 }
 
 const App = () => {
-  const [products, setProducts] = useState<Product[]>([]);
+  const [products, setProducts] = useState<Product[]>(() => {
+    try {
+      const savedProducts = localStorage.getItem('priceTrackerProducts');
+      return savedProducts ? JSON.parse(savedProducts) : [];
+    } catch (error) {
+      console.error("Could not load products from localStorage", error);
+      return [];
+    }
+  });
   const [productUrl, setProductUrl] = useState('');
   // Global affiliate IDs for each store
   const [globalAffiliateIds, setGlobalAffiliateIds] = useState({
@@ -48,6 +56,14 @@ const App = () => {
   // State for Admin Mode
   const [isAdminMode, setIsAdminMode] = useState(true);
 
+  // Save products to localStorage whenever they change
+  useEffect(() => {
+    try {
+      localStorage.setItem('priceTrackerProducts', JSON.stringify(products));
+    } catch (error) {
+      console.error("Could not save products to localStorage", error);
+    }
+  }, [products]);
 
   /**
    * Constructs an affiliate URL by appending the correct affiliate ID for the store.
@@ -112,10 +128,18 @@ const App = () => {
       required: ["productName", "imageUrl", "stores"],
     };
 
-    const prompt = `Baseado na URL do produto a seguir, encontre EXATAMENTE o mesmo produto na Amazon Brasil e no Mercado Livre Brasil.
-    URL: ${url}
+    const prompt = `Use a busca para analisar a URL do produto e encontrar o mesmo item na Amazon Brasil e no Mercado Livre Brasil. Sua prioridade máxima é a precisão do PREÇO e da IMAGEM.
 
-    Retorne o nome do produto, uma URL de imagem de alta qualidade e os preços e links para cada loja no formato JSON especificado. Se não encontrar o produto em uma das lojas, retorne o preço e a URL como 'N/A' para essa loja.`;
+    URL Original: ${url}
+
+    Siga estas regras RIGOROSAMENTE:
+    1.  **Busca e Verificação**: Use a busca para encontrar as páginas de produto mais atuais na Amazon.com.br e no MercadoLivre.com.br. Compare o nome do produto, modelo e especificações para garantir que é EXATAMENTE o mesmo item.
+    2.  **Extração de Nome (productName)**: Obtenha o nome completo e oficial do produto.
+    3.  **Extração de Imagem (imageUrl)**: Encontre a URL da imagem PRINCIPAL e de ALTA RESOLUÇÃO. A URL DEVE ser pública e terminar com uma extensão de imagem (.jpg, .png, .webp). NÃO use imagens de thumbnails, logos, ou URLs que não levam diretamente à imagem. Se for impossível encontrar uma URL válida, retorne 'N/A'.
+    4.  **Extração de Preço (price)**: Extraia o preço À VISTA principal. Ignore preços parcelados, preços de vendedores secundários ou "a partir de". O preço deve ser o valor final que o cliente pagaria (sem frete). Formate como 'R$ 1.234,56'. Se o produto estiver indisponível ou sem preço, retorne 'N/A'.
+    5.  **Extração de URL (url)**: Forneça o link direto para a página do produto encontrada. Se não encontrou, retorne 'N/A'.
+
+    Seu resultado DEVE estar no formato JSON especificado. Verifique novamente todos os campos antes de responder para garantir 100% de precisão.`;
 
     const response = await ai.models.generateContent({
       model: "gemini-2.5-pro",
@@ -123,6 +147,7 @@ const App = () => {
       config: {
         responseMimeType: "application/json",
         responseSchema: responseSchema,
+        tools: [{googleSearch: {}}],
       },
     });
 
@@ -237,7 +262,8 @@ const App = () => {
       setProducts(prevProducts => prevProducts.filter((_, i) => i !== index));
   };
 
-  const ProductCard = ({ product, index }: { product: Product, index: number }) => {
+  // FIX: Explicitly type ProductCard as a React.FC to allow the 'key' prop, which is a standard React attribute for list items.
+  const ProductCard: React.FC<{ product: Product, index: number }> = ({ product, index }) => {
     const bestOffer = useMemo(() => {
         const parsePrice = (price: string | null): number => {
             if (!price || price === 'N/A') return Infinity;
@@ -254,6 +280,8 @@ const App = () => {
             return currentPrice < bestPrice ? current : best;
         });
     }, [product.stores]);
+    
+    const placeholderImg = 'https://via.placeholder.com/300x300.png?text=Imagem+Indisponível';
 
     return (
         <div className="bg-gray-800 rounded-lg shadow-lg overflow-hidden transition-transform transform hover:scale-105 duration-300 flex flex-col group relative">
@@ -300,7 +328,16 @@ const App = () => {
               </div>
           )}
           <div className="bg-white p-2 flex-shrink-0">
-              <img src={product.imageUrl} alt={product.productName} className="w-full h-48 object-contain" />
+              <img 
+                src={!product.imageUrl || product.imageUrl === 'N/A' ? placeholderImg : product.imageUrl} 
+                alt={product.productName} 
+                className="w-full h-48 object-contain"
+                onError={(e) => {
+                  const target = e.target as HTMLImageElement;
+                  target.onerror = null; // prevent looping
+                  target.src = placeholderImg;
+                }}
+              />
           </div>
           <div className="p-4 flex flex-col flex-grow">
             <h3 className="font-bold text-lg h-14 overflow-hidden text-gray-200 flex-grow">{product.productName}</h3>
@@ -443,7 +480,7 @@ const App = () => {
 
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
               {products.map((product, index) => (
-                <ProductCard key={index} product={product} index={index} />
+                <ProductCard key={`${product.originalUrl}-${index}`} product={product} index={index} />
               ))}
             </div>
           </main>
