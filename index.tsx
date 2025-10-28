@@ -1,4 +1,3 @@
-
 import React, { useState, useMemo, useEffect } from 'react';
 import ReactDOM from 'react-dom/client';
 import { GoogleGenAI } from "@google/genai";
@@ -117,8 +116,12 @@ const App = () => {
   
   const fetchProductData = async (url: string): Promise<Omit<Product, 'affiliateIds' | 'stores'> & { stores: Array<{ name: 'Amazon' | 'Mercado Livre'; price: string | null; url: string | null; }> }> => {
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-    const prompt = `Analisando a URL de referência '${url}', identifique o produto exato. Em seguida, usando a busca, encontre o nome completo do produto, a URL da imagem principal de alta resolução, e o preço e a URL do produto correspondente na Amazon.com.br e no MercadoLivre.com.br. 
-Sua resposta DEVE ser APENAS um único bloco de código JSON válido, sem nenhum texto, markdown (como \`\`\`json) ou explicação adicional. Siga estritamente este formato:
+    const prompt = `Analisando a URL de referência '${url}', identifique o produto exato. Em seguida, usando a busca, encontre o nome completo do produto, a URL da imagem principal de alta resolução, e o preço e a URL do produto correspondente na Amazon.com.br e no MercadoLivre.com.br.
+Sua resposta DEVE ser APENAS um único bloco de código JSON válido, sem nenhum texto, markdown ou explicação. Siga estritamente este formato.
+Se você não conseguir encontrar o produto ou qualquer uma das informações, preencha os campos com 'N/A'.
+Em caso de QUALQUER erro, sua resposta AINDA DEVE ser um JSON neste formato: {"error": "Sua descrição do erro aqui"}.
+
+Formato de sucesso:
 {
     "productName": "O nome completo do produto",
     "imageUrl": "A URL da imagem principal ou 'N/A'",
@@ -137,15 +140,24 @@ Sua resposta DEVE ser APENAS um único bloco de código JSON válido, sem nenhum
         const textResponse = response.text;
         const firstBrace = textResponse.indexOf('{');
         const lastBrace = textResponse.lastIndexOf('}');
-        if (firstBrace === -1 || lastBrace === -1 || lastBrace < firstBrace) throw new Error("No valid JSON object found.");
+        if (firstBrace === -1 || lastBrace === -1 || lastBrace < firstBrace) {
+            throw new Error("Nenhum objeto JSON encontrado na resposta da IA.");
+        }
         const jsonString = textResponse.substring(firstBrace, lastBrace + 1);
         data = JSON.parse(jsonString);
     } catch (e) {
-        console.error("Failed to parse JSON response:", response.text, e);
+        console.error("Falha ao analisar a resposta JSON:", response.text, e);
         throw new Error("A IA retornou uma resposta em formato inválido. Tente novamente.");
     }
 
-    if (!data.productName && !data.imageUrl) throw new Error("Não foi possível extrair nenhuma informação da URL fornecida.");
+    if (data.error) {
+        console.error("A IA retornou um erro estruturado:", data.error);
+        throw new Error(`A IA retornou um erro: ${data.error}`);
+    }
+
+    if (!data.productName && !data.imageUrl) {
+        throw new Error("Não foi possível extrair nenhuma informação da URL fornecida.");
+    }
 
     return {
       productName: data.productName || 'Nome não encontrado',
@@ -391,31 +403,35 @@ Sua resposta DEVE ser APENAS um único bloco de código JSON válido, sem nenhum
           <div className="bg-white p-2 flex-shrink-0"><img src={!product.imageUrl || product.imageUrl === 'N/A' ? placeholderImg : product.imageUrl} alt={product.productName} className="w-full h-48 object-contain" onError={(e) => { const target = e.target as HTMLImageElement; target.onerror = null; target.src = placeholderImg; }} /></div>
           <div className="p-4 flex flex-col flex-grow">
             <h3 className="font-bold text-lg h-14 overflow-hidden text-gray-200">{product.productName}</h3>
-            <div className="mt-4 space-y-2 flex-grow">
-              {product.stores.map((store, storeIndex) => (
-                (store.url && store.url !== 'N/A' && store.currentPrice && store.currentPrice !== 'N/A') ? (
-                  <div key={storeIndex} className={`p-2 rounded-lg transition-all ${bestOffer?.name === store.name ? 'bg-cyan-900/50 ring-1 ring-cyan-500' : 'bg-gray-700/80'}`}>
+            <div className="mt-4 space-y-3 flex-grow">
+              {product.stores.map((store, storeIndex) => {
+                  const hasOffer = store.url && store.url !== 'N/A' && store.currentPrice && store.currentPrice !== 'N/A';
+                  if (!hasOffer) return null;
+
+                  return (
+                    <div key={storeIndex} className={`p-3 rounded-lg transition-all ${bestOffer?.name === store.name ? 'bg-cyan-900/50 ring-2 ring-cyan-500' : 'bg-gray-700/80'}`}>
                       <div className="flex justify-between items-center">
-                          <img src={store.name === 'Amazon' ? 'https://upload.wikimedia.org/wikipedia/commons/a/a9/Amazon_logo.svg' : 'https://upload.wikimedia.org/wikipedia/commons/thumb/3/3b/Mercado_Livre_logo.svg/2560px-Mercado_Livre_logo.svg.png'} alt={store.name} className="h-4" />
-                          <div className="text-right">
-                              <p className="font-bold text-lg text-white">{store.currentPrice}</p>
-                              <PriceChangeIndicator history={store.priceHistory} />
-                          </div>
+                        <img src={store.name === 'Amazon' ? 'https://upload.wikimedia.org/wikipedia/commons/a/a9/Amazon_logo.svg' : 'https://upload.wikimedia.org/wikipedia/commons/thumb/3/3b/Mercado_Livre_logo.svg/2560px-Mercado_Livre_logo.svg.png'} alt={store.name} className="h-5" />
+                        <div className="text-right">
+                          <p className="font-bold text-xl text-white">{store.currentPrice}</p>
+                          <PriceChangeIndicator history={store.priceHistory} />
+                        </div>
                       </div>
+                      <a href={constructAffiliateUrl(store.url!, store.name, product.affiliateIds)} target="_blank" rel="noopener noreferrer" className="block w-full text-center bg-cyan-600 hover:bg-cyan-700 text-white font-bold py-2 px-4 rounded-md transition-colors mt-3 text-sm">
+                        Comprar
+                      </a>
+                    </div>
+                  );
+              })}
+              {!product.stores.some(s => s.url && s.url !== 'N/A' && s.currentPrice && s.currentPrice !== 'N/A') && (
+                  <div className="text-center text-gray-400 p-4 bg-gray-700/50 rounded-lg">
+                      Nenhuma oferta encontrada.
                   </div>
-                ) : null
-              ))}
+              )}
             </div>
             <div className="mt-auto pt-4">
-              {bestOffer ? (
-                  <a href={constructAffiliateUrl(bestOffer.url!, bestOffer.name, product.affiliateIds)} target="_blank" rel="noopener noreferrer" className="block w-full text-center bg-cyan-600 hover:bg-cyan-700 text-white font-bold py-3 px-4 rounded-md transition-colors">
-                    Ver a Melhor Oferta
-                  </a>
-              ) : (
-                  <div className="block w-full text-center bg-gray-600 text-white font-bold py-3 px-4 rounded-md mt-4 cursor-not-allowed">Indisponível</div>
-              )}
               {chartData.length > 1 && (
-                <button onClick={() => setShowHistory(!showHistory)} className="block w-full text-center bg-gray-700 hover:bg-gray-600 text-white font-semibold py-2 px-4 rounded-md transition-colors mt-2 text-sm">
+                <button onClick={() => setShowHistory(!showHistory)} className="block w-full text-center bg-gray-700 hover:bg-gray-600 text-white font-semibold py-2 px-4 rounded-md transition-colors text-sm">
                   {showHistory ? 'Esconder' : 'Ver'} Histórico de Preços
                 </button>
               )}
