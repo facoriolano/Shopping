@@ -1,6 +1,7 @@
+
 import React, { useState, useMemo, useEffect } from 'react';
 import ReactDOM from 'react-dom/client';
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenAI, Type } from "@google/genai";
 
 // Define the structure for product data
 interface ProductStore {
@@ -100,75 +101,75 @@ const App = () => {
     }
   };
   
-  const parseGeminiResponse = (textResponse: string): { [key: string]: string } => {
-    const lines = textResponse.split('\n').filter(line => line.includes(':'));
-    const parsedData: { [key: string]: string } = {};
-    lines.forEach(line => {
-      const firstColonIndex = line.indexOf(':');
-      if (firstColonIndex > -1) {
-        const key = line.substring(0, firstColonIndex).trim();
-        const value = line.substring(firstColonIndex + 1).trim();
-        parsedData[key] = value;
-      }
-    });
-    return parsedData;
-  }
 
   /**
    * Fetches product data from a given URL using the Gemini API.
-   * This uses the "Unified Analysis" strategy: a single, robust prompt
-   * to analyze the base URL and find/verify data on other stores.
+   * This robust new version forces the AI to return a strict JSON object,
+   * eliminating parsing errors and improving data accuracy.
    * @param url The product URL to search for.
    * @returns A promise that resolves to the product data.
    */
   const fetchProductData = async (url: string): Promise<Omit<Product, 'affiliateIds'>> => {
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
-    const prompt = `
-**Tarefa:** Agir como um especialista em e-commerce para extrair e comparar dados de um produto.
+    const schema = {
+        type: Type.OBJECT,
+        properties: {
+            productName: {
+                type: Type.STRING,
+                description: "O nome completo e exato do produto, identificado a partir da URL de referência."
+            },
+            imageUrl: {
+                type: Type.STRING,
+                description: "A URL da imagem principal de alta resolução do produto. Deve ser 'N/A' se não for encontrada."
+            },
+            amazon: {
+                type: Type.OBJECT,
+                properties: {
+                    price: { type: Type.STRING, description: "O preço à vista na Amazon.com.br, formatado como 'R$ 1.234,56', ou 'N/A'." },
+                    url: { type: Type.STRING, description: "A URL completa do produto na Amazon.com.br, ou 'N/A'." }
+                },
+                required: ["price", "url"]
+            },
+            mercadoLivre: {
+                type: Type.OBJECT,
+                properties: {
+                    price: { type: Type.STRING, description: "O preço à vista no MercadoLivre.com.br, formatado como 'R$ 1.234,56', ou 'N/A'." },
+                    url: { type: Type.STRING, description: "A URL completa do produto no MercadoLivre.com.br, ou 'N/A'." }
+                },
+                required: ["price", "url"]
+            },
+        },
+        required: ["productName", "imageUrl", "amazon", "mercadoLivre"]
+    };
 
-**URL de Referência:** ${url}
-
-**Instruções Passo a Passo:**
-
-1.  **Análise da URL de Referência:**
-    *   Vá para a URL de referência.
-    *   Identifique o **nome principal e completo** do produto.
-    *   Identifique a **URL da imagem principal de alta resolução**. Ignore thumbnails.
-
-2.  **Busca e Verificação em Lojas:**
-    *   Use a busca para encontrar a página **exata** do mesmo produto (mesmo modelo, cor, capacidade, etc.) na **Amazon.com.br** e no **MercadoLivre.com.br**.
-    *   Se encontrar uma correspondência exata, extraia a URL da página do produto.
-    *   Visite a URL encontrada para cada loja e extraia o **preço principal (à vista)**. O preço deve ser o mais proeminente na página, o que o cliente pagaria em uma única vez. Ignore preços parcelados, de vendedores secundários ou de assinaturas (como Amazon Prime). Formate o preço como 'R$ 1.234,56'.
-
-3.  **Formato de Saída OBRIGATÓRIO:**
-    *   Responda **APENAS** com os dados no formato chave-valor abaixo. Não inclua nenhuma outra palavra, explicação ou formatação.
-    *   Se qualquer informação não puder ser encontrada com 100% de certeza, use o valor **'N/A'**.
-
-**SAÍDA:**
-productName: [Nome do produto da URL de referência]
-imageUrl: [URL da imagem da URL de referência]
-amazonUrl: [URL encontrada na Amazon ou 'N/A']
-amazonPrice: [Preço encontrado na Amazon ou 'N/A']
-mercadoLivreUrl: [URL encontrada no Mercado Livre ou 'N/A']
-mercadoLivrePrice: [Preço encontrado no Mercado Livre ou 'N/A']
-`;
+    const prompt = `Analisando a URL de referência '${url}', identifique o produto exato. Em seguida, usando a busca, encontre o nome completo do produto, a URL da imagem principal de alta resolução, e o preço e a URL do produto correspondente na Amazon.com.br e no MercadoLivre.com.br. Retorne os dados estritamente no formato JSON solicitado. Priorize a precisão absoluta.`;
 
     const response = await ai.models.generateContent({
         model: "gemini-2.5-pro",
         contents: prompt,
-        config: { tools: [{googleSearch: {}}] },
+        config: {
+            responseMimeType: "application/json",
+            responseSchema: schema,
+            tools: [{ googleSearch: {} }],
+        },
     });
 
-    const data = parseGeminiResponse(response.text);
+    let data;
+    try {
+        data = JSON.parse(response.text);
+    } catch (e) {
+        console.error("Failed to parse JSON response:", response.text);
+        throw new Error("A IA retornou uma resposta em formato inválido. Tente novamente.");
+    }
 
     const productName = data.productName || 'Nome não encontrado';
     const imageUrl = data.imageUrl || 'N/A';
-    const amazonUrl = data.amazonUrl || 'N/A';
-    const amazonPrice = data.amazonPrice || 'N/A';
-    const mercadoLivreUrl = data.mercadoLivreUrl || 'N/A';
-    const mercadoLivrePrice = data.mercadoLivrePrice || 'N/A';
-    
+    const amazonUrl = data.amazon?.url || 'N/A';
+    const amazonPrice = data.amazon?.price || 'N/A';
+    const mercadoLivreUrl = data.mercadoLivre?.url || 'N/A';
+    const mercadoLivrePrice = data.mercadoLivre?.price || 'N/A';
+
     if (productName === 'Nome não encontrado' && imageUrl === 'N/A') {
         throw new Error("Não foi possível extrair nenhuma informação da URL fornecida.");
     }
@@ -191,6 +192,7 @@ mercadoLivrePrice: [Preço encontrado no Mercado Livre ou 'N/A']
       originalUrl: url
     };
   };
+
 
   /**
    * Handles adding a new product to the list.
