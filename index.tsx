@@ -104,62 +104,55 @@ const App = () => {
 
   /**
    * Fetches product data from a given URL using the Gemini API.
-   * This robust new version forces the AI to return a strict JSON object,
-   * eliminating parsing errors and improving data accuracy.
+   * This function was rebuilt to comply with Gemini API rules, which forbid
+   * using googleSearch tool with responseSchema. It now relies on a highly
+   * specific prompt to get a JSON string and robustly parses it.
    * @param url The product URL to search for.
    * @returns A promise that resolves to the product data.
    */
   const fetchProductData = async (url: string): Promise<Omit<Product, 'affiliateIds'>> => {
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
-    const schema = {
-        type: Type.OBJECT,
-        properties: {
-            productName: {
-                type: Type.STRING,
-                description: "O nome completo e exato do produto, identificado a partir da URL de referência."
-            },
-            imageUrl: {
-                type: Type.STRING,
-                description: "A URL da imagem principal de alta resolução do produto. Deve ser 'N/A' se não for encontrada."
-            },
-            amazon: {
-                type: Type.OBJECT,
-                properties: {
-                    price: { type: Type.STRING, description: "O preço à vista na Amazon.com.br, formatado como 'R$ 1.234,56', ou 'N/A'." },
-                    url: { type: Type.STRING, description: "A URL completa do produto na Amazon.com.br, ou 'N/A'." }
-                },
-                required: ["price", "url"]
-            },
-            mercadoLivre: {
-                type: Type.OBJECT,
-                properties: {
-                    price: { type: Type.STRING, description: "O preço à vista no MercadoLivre.com.br, formatado como 'R$ 1.234,56', ou 'N/A'." },
-                    url: { type: Type.STRING, description: "A URL completa do produto no MercadoLivre.com.br, ou 'N/A'." }
-                },
-                required: ["price", "url"]
-            },
-        },
-        required: ["productName", "imageUrl", "amazon", "mercadoLivre"]
-    };
+    // The prompt now explicitly asks for a JSON structure, since responseSchema cannot be used with googleSearch.
+    const prompt = `Analisando a URL de referência '${url}', identifique o produto exato. Em seguida, usando a busca, encontre o nome completo do produto, a URL da imagem principal de alta resolução, e o preço e a URL do produto correspondente na Amazon.com.br e no MercadoLivre.com.br. 
+    
+Sua resposta DEVE ser APENAS um único bloco de código JSON válido, sem nenhum texto, markdown (como \`\`\`json) ou explicação adicional. Siga estritamente este formato:
+{
+    "productName": "O nome completo do produto",
+    "imageUrl": "A URL da imagem principal ou 'N/A'",
+    "amazon": {
+        "price": "O preço à vista na Amazon, como 'R$ 1.234,56', ou 'N/A'",
+        "url": "A URL do produto na Amazon ou 'N/A'"
+    },
+    "mercadoLivre": {
+        "price": "O preço à vista no Mercado Livre, como 'R$ 1.234,56', ou 'N/A'",
+        "url": "A URL do produto no Mercado Livre ou 'N/A'"
+    }
+}`;
 
-    const prompt = `Analisando a URL de referência '${url}', identifique o produto exato. Em seguida, usando a busca, encontre o nome completo do produto, a URL da imagem principal de alta resolução, e o preço e a URL do produto correspondente na Amazon.com.br e no MercadoLivre.com.br. Retorne os dados estritamente no formato JSON solicitado. Priorize a precisão absoluta.`;
-
+    // IMPORTANT: As per Gemini docs, responseSchema/responseMimeType cannot be used with the googleSearch tool.
+    // We must rely on prompt engineering to get a JSON response and then parse it.
     const response = await ai.models.generateContent({
-        model: "gemini-2.5-pro",
+        model: "gemini-2.5-flash", // Using flash for speed and cost-effectiveness.
         contents: prompt,
         config: {
-            responseMimeType: "application/json",
-            responseSchema: schema,
             tools: [{ googleSearch: {} }],
         },
     });
 
     let data;
     try {
-        data = JSON.parse(response.text);
+        // Find the start and end of the JSON object in the response text.
+        const textResponse = response.text;
+        const firstBrace = textResponse.indexOf('{');
+        const lastBrace = textResponse.lastIndexOf('}');
+        if (firstBrace === -1 || lastBrace === -1 || lastBrace < firstBrace) {
+            throw new Error("No valid JSON object found in the response.");
+        }
+        const jsonString = textResponse.substring(firstBrace, lastBrace + 1);
+        data = JSON.parse(jsonString);
     } catch (e) {
-        console.error("Failed to parse JSON response:", response.text);
+        console.error("Failed to parse JSON response:", response.text, e);
         throw new Error("A IA retornou uma resposta em formato inválido. Tente novamente.");
     }
 
@@ -212,7 +205,8 @@ const App = () => {
       setProductUrl('');
     } catch (err) {
       console.error(err);
-      setError("Não foi possível buscar as informações do produto. Verifique a URL e tente novamente.");
+      const errorMessage = err instanceof Error ? err.message : "Ocorreu um erro desconhecido.";
+      setError(`Não foi possível buscar as informações do produto. Detalhe: ${errorMessage}`);
     } finally {
       setIsLoading(false);
     }
@@ -285,7 +279,8 @@ const App = () => {
 
     } catch (err) {
       console.error("Failed to save edit:", err);
-      setError("Não foi possível salvar as alterações. Verifique a URL e tente novamente.");
+      const errorMessage = err instanceof Error ? err.message : "Ocorreu um erro desconhecido.";
+      setError(`Não foi possível salvar as alterações. Detalhe: ${errorMessage}`);
       // If closing the modal on failure is not desired, remove the next line
       setEditingState(null); 
     } finally {
