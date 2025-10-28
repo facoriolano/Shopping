@@ -1,3 +1,4 @@
+
 import React, { useState } from 'react';
 import ReactDOM from 'react-dom/client';
 import { GoogleGenAI, Type } from "@google/genai";
@@ -14,15 +15,23 @@ interface Product {
   imageUrl: string;
   stores: ProductStore[];
   originalUrl: string;
-  affiliateId?: string; // Each product can have its own affiliate ID
+  affiliateIds?: { // Each product can have its own affiliate IDs
+    amazon?: string;
+    mercadoLivre?: string;
+  };
 }
 
 const App = () => {
   const [products, setProducts] = useState<Product[]>([]);
   const [productUrl, setProductUrl] = useState('');
-  const [affiliateId, setAffiliateId] = useState(''); // Global affiliate ID
+  // Global affiliate IDs for each store
+  const [globalAffiliateIds, setGlobalAffiliateIds] = useState({
+    amazon: 'facoriolano-20',
+    mercadoLivre: 'fabriciocoriolano'
+  });
   const [isLoading, setIsLoading] = useState(false);
   const [isUpdatingAll, setIsUpdatingAll] = useState(false);
+  const [updatingProductIndex, setUpdatingProductIndex] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   // State for the editing modal
@@ -30,27 +39,39 @@ const App = () => {
     product: Product;
     index: number;
     newUrl: string;
-    newAffiliateId: string;
+    newAffiliateIds: {
+        amazon: string;
+        mercadoLivre: string;
+    };
   } | null>(null);
   const [isSavingEdit, setIsSavingEdit] = useState(false);
 
 
   /**
-   * Constructs an affiliate URL by appending the affiliate ID.
+   * Constructs an affiliate URL by appending the correct affiliate ID for the store.
    * Prefers product-specific ID, falls back to global ID.
    * @param url The original product URL.
    * @param storeName The name of the store ("Amazon" or "Mercado Livre").
-   * @param productAffiliateId The product-specific affiliate ID.
+   * @param productAffiliateIds The product-specific affiliate IDs object.
    * @returns The modified URL with the affiliate tag.
    */
-  const constructAffiliateUrl = (url: string, storeName: string, productAffiliateId?: string): string => {
-    const idToUse = productAffiliateId || affiliateId; // Use product-specific ID or fallback to global
-    if (!idToUse || !url) return url;
+  const constructAffiliateUrl = (url: string, storeName: "Amazon" | "Mercado Livre", productAffiliateIds?: { amazon?: string; mercadoLivre?: string; }): string => {
+    let idToUse: string | undefined;
+
+    if (storeName === 'Amazon') {
+      idToUse = productAffiliateIds?.amazon || globalAffiliateIds.amazon;
+    } else if (storeName === 'Mercado Livre') {
+      idToUse = productAffiliateIds?.mercadoLivre || globalAffiliateIds.mercadoLivre;
+    }
+
+    if (!idToUse || !url || url === 'N/A') return url;
+
     try {
       const urlObject = new URL(url);
       if (storeName === 'Amazon') {
         urlObject.searchParams.set('tag', idToUse);
       } else if (storeName === 'Mercado Livre') {
+        // Mercado Livre often uses 'afid'
         urlObject.searchParams.set('afid', idToUse);
       }
       return urlObject.toString();
@@ -65,7 +86,7 @@ const App = () => {
    * @param url The product URL to search for.
    * @returns A promise that resolves to the product data.
    */
-  const fetchProductData = async (url: string): Promise<Omit<Product, 'affiliateId'>> => {
+  const fetchProductData = async (url: string): Promise<Omit<Product, 'affiliateIds'>> => {
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
     const responseSchema = {
@@ -104,7 +125,7 @@ const App = () => {
     });
 
     const jsonString = response.text.trim();
-    const productData = JSON.parse(jsonString) as Omit<Product, 'originalUrl' | 'affiliateId'>;
+    const productData = JSON.parse(jsonString) as Omit<Product, 'originalUrl' | 'affiliateIds'>;
     return { ...productData, originalUrl: url };
   };
 
@@ -121,7 +142,7 @@ const App = () => {
 
     try {
       const productData = await fetchProductData(productUrl);
-      const newProduct: Product = { ...productData, affiliateId: affiliateId };
+      const newProduct: Product = { ...productData, affiliateIds: globalAffiliateIds };
       setProducts(prevProducts => [...prevProducts, newProduct]);
       setProductUrl('');
     } catch (err) {
@@ -139,10 +160,10 @@ const App = () => {
     setIsUpdatingAll(true);
     setError(null);
     
-    // Create promises to fetch new data, but preserve existing affiliate ID
+    // Create promises to fetch new data, but preserve existing affiliate IDs
     const updatePromises = products.map(async (product) => {
         const newData = await fetchProductData(product.originalUrl);
-        return { ...newData, affiliateId: product.affiliateId }; // Keep old affiliate ID
+        return { ...newData, affiliateIds: product.affiliateIds }; // Keep old affiliate IDs
     });
 
     const results = await Promise.allSettled(updatePromises);
@@ -168,34 +189,41 @@ const App = () => {
 
     setIsSavingEdit(true);
     setError(null);
+    
+    const { index, newUrl, newAffiliateIds, product } = editingState;
 
     try {
       let updatedProduct: Product;
+      
       // Refetch product data only if the URL has changed
-      if (editingState.newUrl !== editingState.product.originalUrl) {
-          const fetchedData = await fetchProductData(editingState.newUrl);
+      if (newUrl !== product.originalUrl) {
+          setUpdatingProductIndex(index); // Set loading state for the specific card
+          setEditingState(null); // Close modal immediately to show card loader
+          
+          const fetchedData = await fetchProductData(newUrl);
           updatedProduct = {
             ...fetchedData,
-            affiliateId: editingState.newAffiliateId,
+            affiliateIds: newAffiliateIds,
           };
       } else {
-        // If only the affiliate ID changed, just update that
+        // If only the affiliate IDs changed, just update that locally
         updatedProduct = {
-          ...editingState.product,
-          affiliateId: editingState.newAffiliateId,
+          ...product,
+          affiliateIds: newAffiliateIds,
         };
+        setEditingState(null); // Close modal
       }
       
       const newProducts = [...products];
-      newProducts[editingState.index] = updatedProduct;
+      newProducts[index] = updatedProduct;
       setProducts(newProducts);
-      setEditingState(null); // Close the modal
 
     } catch (err) {
       console.error("Failed to save edit:", err);
       setError("Não foi possível salvar as alterações. Verifique a URL e tente novamente.");
     } finally {
       setIsSavingEdit(false);
+      setUpdatingProductIndex(null); // Clear the specific card's loading state
     }
   };
 
@@ -212,14 +240,22 @@ const App = () => {
           <main>
             <div className="bg-gray-800 p-6 rounded-lg shadow-lg mb-8 sticky top-4 z-10">
               <h2 className="text-2xl font-semibold mb-4 text-white">Adicionar Novo Produto</h2>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
-                <input
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                 <input
                   type="text"
-                  value={affiliateId}
-                  onChange={(e) => setAffiliateId(e.target.value)}
-                  placeholder="Seu ID de Afiliado Global (opcional)"
-                  className="md:col-span-3 bg-gray-700 text-white placeholder-gray-400 border border-gray-600 rounded-md py-3 px-4 focus:outline-none focus:ring-2 focus:ring-cyan-500"
-                  aria-label="Seu ID de Afiliado Global"
+                  value={globalAffiliateIds.amazon}
+                  onChange={(e) => setGlobalAffiliateIds(prev => ({...prev, amazon: e.target.value}))}
+                  placeholder="Seu ID de Afiliado Amazon (tag)"
+                  className="bg-gray-700 text-white placeholder-gray-400 border border-gray-600 rounded-md py-3 px-4 focus:outline-none focus:ring-2 focus:ring-cyan-500"
+                  aria-label="Seu ID de Afiliado Amazon (Global)"
+                />
+                 <input
+                  type="text"
+                  value={globalAffiliateIds.mercadoLivre}
+                  onChange={(e) => setGlobalAffiliateIds(prev => ({...prev, mercadoLivre: e.target.value}))}
+                  placeholder="Seu ID de Afiliado Mercado Livre (afid)"
+                  className="bg-gray-700 text-white placeholder-gray-400 border border-gray-600 rounded-md py-3 px-4 focus:outline-none focus:ring-2 focus:ring-cyan-500"
+                  aria-label="Seu ID de Afiliado Mercado Livre (Global)"
                 />
               </div>
               <div className="flex flex-col sm:flex-row gap-4">
@@ -229,12 +265,12 @@ const App = () => {
                   onChange={(e) => setProductUrl(e.target.value)}
                   placeholder="Cole o link do produto aqui (Ex: Amazon)"
                   className="flex-grow bg-gray-700 text-white placeholder-gray-400 border border-gray-600 rounded-md py-3 px-4 focus:outline-none focus:ring-2 focus:ring-cyan-500"
-                  disabled={isLoading || isUpdatingAll}
+                  disabled={isLoading || isUpdatingAll || updatingProductIndex !== null}
                   aria-label="URL do Produto"
                 />
                 <button
                   onClick={handleAddProduct}
-                  disabled={isLoading || isUpdatingAll || !productUrl}
+                  disabled={isLoading || isUpdatingAll || updatingProductIndex !== null || !productUrl}
                   className="bg-cyan-600 hover:bg-cyan-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold py-3 px-6 rounded-md transition-colors duration-300 flex items-center justify-center"
                 >
                   {isLoading ? (
@@ -252,7 +288,7 @@ const App = () => {
               <h2 className="text-3xl font-bold text-gray-300">Meus Produtos</h2>
               <button
                 onClick={handleUpdateAllProducts}
-                disabled={isLoading || isUpdatingAll || products.length === 0}
+                disabled={isLoading || isUpdatingAll || updatingProductIndex !== null || products.length === 0}
                 className="bg-green-600 hover:bg-green-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold py-2 px-4 rounded-md transition-colors duration-300 flex items-center justify-center gap-2"
                 aria-label="Atualizar preços de todos os produtos"
               >
@@ -279,16 +315,28 @@ const App = () => {
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
               {products.map((product, index) => (
                 <div key={index} className="bg-gray-800 rounded-lg shadow-lg overflow-hidden transition-transform transform hover:scale-105 duration-300 flex flex-col group relative">
+                  {updatingProductIndex === index && (
+                    <div className="absolute inset-0 bg-gray-800 bg-opacity-80 flex flex-col justify-center items-center z-20 rounded-lg">
+                        <svg className="animate-spin h-8 w-8 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                        <p className="mt-2 text-white font-semibold">Atualizando...</p>
+                    </div>
+                  )}
                   <button
                     onClick={() => setEditingState({
                       product,
                       index,
                       newUrl: product.originalUrl,
-                      newAffiliateId: product.affiliateId || '',
+                      newAffiliateIds: {
+                        amazon: product.affiliateIds?.amazon || '',
+                        mercadoLivre: product.affiliateIds?.mercadoLivre || ''
+                      },
                     })}
                     className="absolute top-2 right-2 bg-gray-700/50 hover:bg-cyan-600/80 text-white p-2 rounded-full opacity-0 group-hover:opacity-100 transition-opacity z-10"
                     aria-label="Editar produto"
-                    disabled={isLoading || isUpdatingAll || isSavingEdit}
+                    disabled={isLoading || isUpdatingAll || isSavingEdit || updatingProductIndex !== null}
                   >
                     <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
                       <path d="M17.414 2.586a2 2 0 00-2.828 0L7 10.172V13h2.828l7.586-7.586a2 2 0 000-2.828z" />
@@ -305,7 +353,7 @@ const App = () => {
                         store.url && store.price && store.url !== 'N/A' && store.price !== 'N/A' ? (
                           <a
                             key={storeIndex}
-                            href={constructAffiliateUrl(store.url, store.name, product.affiliateId)}
+                            href={constructAffiliateUrl(store.url, store.name, product.affiliateIds)}
                             target="_blank"
                             rel="noopener noreferrer"
                             className="flex justify-between items-center bg-gray-700 p-3 rounded-md hover:bg-gray-600 transition-colors"
@@ -348,14 +396,27 @@ const App = () => {
                 />
               </div>
               <div>
-                <label htmlFor="edit-affiliate-id" className="block text-sm font-medium text-gray-300 mb-1">
-                  ID de Afiliado (específico do produto)
+                <label htmlFor="edit-affiliate-id-amazon" className="block text-sm font-medium text-gray-300 mb-1">
+                  ID de Afiliado Amazon
                 </label>
                 <input
                   type="text"
-                  id="edit-affiliate-id"
-                  value={editingState.newAffiliateId}
-                  onChange={(e) => setEditingState({ ...editingState, newAffiliateId: e.target.value })}
+                  id="edit-affiliate-id-amazon"
+                  value={editingState.newAffiliateIds.amazon}
+                  onChange={(e) => setEditingState(prev => prev ? { ...prev, newAffiliateIds: {...prev.newAffiliateIds, amazon: e.target.value } } : null)}
+                  placeholder="Deixe em branco para usar o ID global"
+                  className="w-full bg-gray-700 text-white placeholder-gray-400 border border-gray-600 rounded-md py-2 px-3 focus:outline-none focus:ring-2 focus:ring-cyan-500"
+                />
+              </div>
+               <div>
+                <label htmlFor="edit-affiliate-id-ml" className="block text-sm font-medium text-gray-300 mb-1">
+                  ID de Afiliado Mercado Livre
+                </label>
+                <input
+                  type="text"
+                  id="edit-affiliate-id-ml"
+                  value={editingState.newAffiliateIds.mercadoLivre}
+                  onChange={(e) => setEditingState(prev => prev ? { ...prev, newAffiliateIds: {...prev.newAffiliateIds, mercadoLivre: e.target.value } } : null)}
                   placeholder="Deixe em branco para usar o ID global"
                   className="w-full bg-gray-700 text-white placeholder-gray-400 border border-gray-600 rounded-md py-2 px-3 focus:outline-none focus:ring-2 focus:ring-cyan-500"
                 />
